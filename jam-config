@@ -1,0 +1,365 @@
+#!/usr/bin/env perl
+
+######################################################################
+# Juniper SRX Dynamic VPN client setup script
+# ===========================================
+# James E. Flemer <james.flemer@ndpgroup.com>
+# 
+# June 10, 2012
+# 
+# Description
+# -----------
+# This script uses the Juniper Access Manager (JAM) web services to
+# download VPN settings from a Juniper SRX firewall (or other JunOS
+# device with Dynamic VPN support).  It is capable of writing the
+# settings out in the format used by network-manager-vpnc, and the
+# format used by plain vpnc.
+#  
+# Known Limitations
+# -----------------
+#  * Vpnc and network-manager-vpnc need patches to support Juniper
+#    SRX.  Hopefully these will be integrated upstream soon.
+#  * Plain vpnc doesn't have the ability to setup routes like
+#    network-manager.
+#  * The IKE and IPSec algorithms are not processed yet.  This
+#    should be trivial to add if needed.  (Add "debug 1" to the
+#    command line to get started.)
+# 
+# Future Enhancements
+# -------------------
+#  * Ideally, this capability would be directly integrated into the
+#    network-manager-vpnc GUI in some way (i.e. act a bit more like
+#    the windows JAM client.)
+# 
+# See Also
+# --------
+#  * vpnc: http://www.unix-ag.uni-kl.de/~massar/vpnc/
+#  * NetworkManager: http://projects.gnome.org/NetworkManager/
+#  * vpnc w/ Juniper SRX support: https://github.com/ndpgroup/vpnc
+######################################################################
+
+######################################################################
+# Copyright (c) 2012, NDP, LLC.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#  * Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in
+#    the documentation and/or other materials provided with the
+#    distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+# COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+# ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+######################################################################
+
+use strict;
+use warnings;
+
+{
+  package Juniper::AM;
+
+  use HTTP::Cookies;
+  use HTTP::Headers;
+  use HTTP::Request::Common qw/GET POST/;
+  use LWP::UserAgent;
+  use MIME::Base64;
+
+  sub new {
+    my $class = shift;
+    my $self = {};
+    bless $self, $class;
+    $self->_init(@_);
+    return $self;
+  }
+
+  sub _init {
+    my $self = shift;
+    $self->{addr} = undef;
+    $self->{user} = undef;
+    $self->{pass} = undef;
+    $self->{debug} = 0;
+
+    my %opt = @_;
+    foreach my $o (qw/addr user pass debug/) {
+      $self->{$o} = $opt{$o} if defined($opt{$o});
+    }
+
+    $self->addr($self->{addr});
+
+    map { $self->_debug_print('--', "$_ = " . $self->{$_}) } sort keys %$self;
+  }
+
+  sub addr {
+    my $self = shift;
+    if (@_) {
+      my $addr = shift;
+      $addr = "https://$addr" unless $addr =~ m!^[a-z]*://!i;
+      $addr = new URI($addr);
+      if ($addr->userinfo) {
+        my ($user, $pass) = split(/:/, $addr->userinfo, 1);
+        $self->{user} = $user;
+        $self->{user} = $user;
+        $addr->userinfo(undef);
+      }
+      $self->{addr} = $addr->as_string;
+      $self->{addr} .= "/" unless $self->{addr} =~ m!/$!;
+    }
+    $self->{addr};
+  }
+
+  sub user {
+    my $self = shift;
+    $self->{user} = shift if @_;
+    $self->{user};
+  }
+
+  sub password {
+    my $self = shift;
+    $self->{pass} = shift if @_;
+    $self->{pass};
+  }
+
+  sub _retrieve {
+    my $self = shift;
+    my $cookies = new HTTP::Cookies();
+
+    my $ua = new LWP::UserAgent(cookie_jar => $cookies, timeout => 300, max_redirect => 1);
+    #$ua->agent(...);
+    #$ua->env_proxy;
+    $ua->default_header('Accept-Encoding' => scalar HTTP::Message::decodable());
+    push @{ $ua->requests_redirectable }, 'POST';
+
+    # https://localhost/dynamic-vpn/login
+    if (0) {
+      #my $addr = $self->{addr} . "junos-auth/login";
+      my $addr = $self->{addr} . "dynamic-vpn/login";
+      my $req = $self->_auth_request($addr);
+      $self->_debug_print(">>", "POST $addr", $ua->default_headers->as_string, $req->headers->as_string, '', $req->content);
+      my $res = $ua->request($req);
+      $self->_debug_print("<<", $res->status_line, $res->headers->as_string);
+      #$self->_debug_print('--', $cookies->as_string);
+      my $data = $res->decoded_content;
+      if (!$res->is_success || !$cookies->as_string) {
+        my $msg = $res->status_line;
+        $self->_debug_print('', $data);
+        die "Login failed - $msg\n\t";
+      }
+    }
+
+    # https://localhost/dynamic-vpn/client/login
+    {
+      #my $addr = $self->{addr} . "dynamic-vpn/setupApplet.php";
+      my $addr = $self->{addr} . "dynamic-vpn/client/login";
+      my $req = $self->_auth_request($addr);
+      $self->_debug_print(">>", "POST $addr", $ua->default_headers->as_string, $req->headers->as_string, '', $req->content);
+      my $res = $ua->request($req);
+      $self->_debug_print("<<", $res->status_line . "\n" . $res->headers->as_string);
+      #$self->_debug_print('--', $cookies->as_string);
+      $self->_debug_print("", $res->decoded_content);
+      if (!$res->is_success) {
+        my $msg = $res->status_line;
+        die "JAM Client Login request failed - $msg\n\t";
+      }
+      my $data = $res->decoded_content;
+      my ($cfg) = ($data =~ m/NAME="parameter0" VALUE="initialConfigScript=(.*?)"/ig);
+      if (!$cfg) {
+        #$self->_debug_print("", "\n$data");
+        die "Did not find 'initialConfigScript' in response\n\t";
+      }
+      $cfg = decode_base64($cfg);
+      $self->_debug_print("==", $cfg);
+      $self->{cfg} = $cfg;
+    }
+    $self->{cfg};
+  }
+
+  sub _auth_request {
+    my $self = shift;
+    my $url = shift;
+    my %args = (
+      'login' => 'login',
+      #'realm' => '',
+      'username' => $self->{user},
+      'password' => $self->{pass},
+    );
+    my $req = POST($url, \%args);
+    $req->headers->header('X-Authentication-Prompt', 'Password');
+    $req->headers->header('X-Authentication-Type', 'password');
+    $req->headers->header('X-Authentication-Username', $self->{user});
+    $req->headers->header('X-Authentication-Password', $self->{pass});
+    #$req->headers->header('X-Junos-Client-Address', '');
+    #$req->headers->header('X-Junos-Client-Id', '');
+    #$req->headers->header('X-Junos-Client-Identifier', '');
+    #$req->headers->header('X-Junos-Key', '');
+    $req;
+  }
+
+  sub _debug_print {
+    my $self = shift;
+    return unless $self->{debug};
+    my $prefix = shift;
+    my @d = map { split(/\r?\n/, $_) } @_;
+    map { print STDERR "$prefix $_\n" } @d;
+  }
+
+  sub get {
+    my $self = shift;
+    my $key = shift;
+    $self->_retrieve unless $self->{cfg};
+    my ($val) = ($self->{cfg} =~ m!<control\b[^>]*\s${key}="(.*?)"!g);
+    if (!defined($val) && $key =~ s/_/-/g) {
+      ($val) = ($self->{cfg} =~ m!<control\b[^>]*\s${key}="(.*?)"!g);
+    }
+    $val;
+  }
+
+  sub AUTOLOAD {
+    our $AUTOLOAD;
+    my $self = $_[0];
+    die unless ref($self); # FIXME
+    my $sym = $AUTOLOAD;
+    my ($method) = $AUTOLOAD =~ m/([^:]+)$/;
+    {
+      no strict 'refs';
+      *$sym = sub { $self->get($method) };
+    }
+    goto &$sym;
+  }
+
+  sub DESTROY {
+  }
+}
+
+sub build_nm_vpnc_config {
+  my $JAM = shift;
+
+  my %data;
+  $data{addr} = URI->new($JAM->{addr})->host;
+  foreach my $k (qw/user password ike_gateway ike_phase1UID ike_phase1UIDType ike_phase1PresharedKey ike_dhGroup ipsec_pfsGroup/) {
+    $data{$k} = $JAM->$k;
+  }
+  foreach my $k (qw/ike_dhGroup ipsec_pfsGroup/) {
+    $data{$k} =~ s/group/dh/;
+  }
+
+  eval {
+    use UUID;
+    my $uuid;
+    my $uuid_str;
+    UUID::generate($uuid);
+    UUID::unparse($uuid, $uuid_str);
+    $data{uuid} = $uuid_str;
+  };
+  if ($@) {
+    # broken fall back
+    $data{uuid} = join('-', map { sprintf("%0${_}x", rand(2**(8*$_))) } (8,4,4,4,12));
+  }
+
+  my $cfg = <<EOF;
+[connection]
+id=$data{ike_gateway}
+uuid=$data{uuid}
+type=vpn
+autconnect=false
+
+[vpn]
+service-type=org.freedesktop.NetworkManager.vpnc
+Vendor=juniper
+IPSec gateway=$data{addr}
+IPSec ID=$data{ike_phase1UID}
+IPSec IDType=$data{ike_phase1UIDType}
+IPSec secret=$data{ike_phase1PresharedKey}
+IPSec secret-flags=0
+ipsec-secret-type=save
+Xauth-username=$data{user}
+Xauth-password=$data{password}
+Xauth-password-flags=0
+xauth-password-type=save
+IKE DH Group=$data{ike_dhGroup}
+Perfect Forward Secrecy=$data{ipsec_pfsGroup}
+
+[ipv4]
+method=auto
+EOF
+
+  if ($JAM->remote_exceptions =~ m!\b0\.0\.0\.0/0\b!) {
+    $cfg .= "never-default=true\n";
+  }
+
+  my $n = 0;
+  foreach my $net (split(/,/, $JAM->remote_protected_resources)) {
+    next unless $net;
+    my ($ip, $masklen) = split(m!/!, $net);
+    $cfg .= 'routes' . ++$n . "=$ip;$masklen;0.0.0.0;0;\n";
+  }
+
+  $cfg .= "\n# NOTE: You probably will need to set DNS settings by hand.  :-(\n";
+
+  $cfg;
+}
+
+sub build_vpnc_config {
+  my $JAM = shift;
+
+  my %data;
+  $data{addr} = URI->new($JAM->{addr})->host;
+  foreach my $k (qw/user password ike_gateway ike_phase1UID ike_phase1UIDType ike_phase1PresharedKey ike_dhGroup ipsec_pfsGroup/) {
+    $data{$k} = $JAM->$k;
+  }
+  foreach my $k (qw/ike_dhGroup ipsec_pfsGroup/) {
+    $data{$k} =~ s/group/dh/;
+  }
+
+  my $cfg = <<EOF;
+Vendor juniper
+IPSec gateway $data{addr}
+IPSec ID $data{ike_phase1UID}
+IPSec IDType $data{ike_phase1UIDType}
+IPSec secret $data{ike_phase1PresharedKey}
+Xauth-username $data{user}
+Xauth-password $data{password}
+IKE DH Group $data{ike_dhGroup}
+Perfect Forward Secrecy $data{ipsec_pfsGroup}
+EOF
+  $cfg;
+}
+
+if (@ARGV < 2) {
+  print "usage: $0 options...\n";
+  print "\n";
+  print "Options:\n";
+  print "  For network-manager-vpnc:\n";
+  print "    $0 addr vpn-addr user joe pass joespwd \\\n";
+  print "      | sudo tee /etc/NetworkManager/system-connections/MyVPN\n";
+  print "  For plain vpnc:\n";
+  print "    $0 addr vpn-addr user joe pass joespwd format vpnc \\\n";
+  print "      | sudo tee /etc/vpnc/MyVPN.conf\n";
+  print "\n";
+  print "NOTE: Your group & user passwords will be stored in plain text,\n";
+  print "edit as needed!\n";
+  exit 64;
+}
+
+my %opt = @ARGV;
+my $JAM = Juniper::AM->new(%opt);
+
+if (defined($opt{format}) && $opt{format} eq 'vpnc') {
+  print build_vpnc_config($JAM);
+} else {
+  print build_nm_vpnc_config($JAM);
+}
