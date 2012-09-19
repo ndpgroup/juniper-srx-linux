@@ -45,3 +45,4 @@ See Also
  * vpnc: http://www.unix-ag.uni-kl.de/~massar/vpnc/
  * NetworkManager: http://projects.gnome.org/NetworkManager/
  * vpnc w/ Juniper SRX support: https://github.com/ndpgroup/vpnc
+ * network-manager-vpnc patches: https://gist.github.com/3747514
