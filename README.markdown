@@ -11,7 +11,19 @@ download VPN settings from a Juniper SRX firewall (or other JunOS
 device with Dynamic VPN support).  It is capable of writing the
 settings out in the format used by network-manager-vpnc, and the
 format used by plain vpnc.
- 
+
+Usage
+-----
+Run with _--help_ for usage.
+
+Example for network-manager-vpnc:
+
+    jam-config addr vpn.example.com user joe pass joespwd | sudo tee /etc/NetworkManager/system-connections/MyVPN
+
+Example for plain vpnc:
+
+    jam-config addr vpn.example.com user joe pass joespwd format vpnc | sudo tee /etc/vpnc/MyVPN.conf
+
 Known Limitations
 -----------------
  * Vpnc and network-manager-vpnc need patches to support Juniper
