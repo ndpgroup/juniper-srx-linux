@@ -331,8 +331,8 @@ IPSec gateway $data{addr}
 IPSec ID $data{ike_phase1UID}
 IPSec IDType $data{ike_phase1UIDType}
 IPSec secret $data{ike_phase1PresharedKey}
-Xauth-username $data{user}
-Xauth-password $data{password}
+Xauth username $data{user}
+Xauth password $data{password}
 IKE DH Group $data{ike_dhGroup}
 Perfect Forward Secrecy $data{ipsec_pfsGroup}
 EOF
