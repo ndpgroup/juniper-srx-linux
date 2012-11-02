@@ -33,6 +33,9 @@ Known Limitations
  * The IKE and IPSec algorithms are not processed yet.  This
    should be trivial to add if needed.  (Add "debug 1" to the
    command line to get started.)
+ * If the vpn uses a self-signed or otherwise "bad" SSL certificate
+   you may need to set ```PERL_LWP_SSL_VERIFY_HOSTNAME=0``` in
+   the environment before running.
 
 Future Enhancements
 -------------------
