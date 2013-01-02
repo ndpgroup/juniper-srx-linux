@@ -275,23 +275,26 @@ sub build_nm_vpnc_config {
 id=$data{ike_gateway}
 uuid=$data{uuid}
 type=vpn
-autconnect=false
+autoconnect=false
 
 [vpn]
 service-type=org.freedesktop.NetworkManager.vpnc
 Vendor=juniper
 IPSec gateway=$data{addr}
 IPSec ID=$data{ike_phase1UID}
-IPSec IDType=$data{ike_phase1UIDType}
-IPSec secret=$data{ike_phase1PresharedKey}
+#IPSec IDType=$data{ike_phase1UIDType}
 IPSec secret-flags=0
 ipsec-secret-type=save
-Xauth-username=$data{user}
-Xauth-password=$data{password}
-Xauth-password-flags=0
+Xauth username=$data{user}
+Xauth password-flags=0
 xauth-password-type=save
 IKE DH Group=$data{ike_dhGroup}
 Perfect Forward Secrecy=$data{ipsec_pfsGroup}
+NAT Traversal Mode=natt
+
+[vpn-secrets]
+IPSec secret=$data{ike_phase1PresharedKey}
+Xauth password=$data{password}
 
 [ipv4]
 method=auto
